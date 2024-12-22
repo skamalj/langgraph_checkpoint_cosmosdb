@@ -35,7 +35,12 @@ Database and Container is created if it does not exists
 saver = CosmosDBSaver(database_name='your_database', container_name='your_container')
 ```
 
+## Limitations
+List function does not support filters. You can only pass config on thread id to get the list.
 
+```
+print(list(memory.list(config=config)))
+```
 ## License
 
 This project is licensed under the MIT License.

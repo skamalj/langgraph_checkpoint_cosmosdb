@@ -85,7 +85,7 @@ def _load_writes(serde: CosmosSerializer, task_id_to_data: dict[tuple[str, str],
     writes = [
         (
             task_id,
-            data["channel"].decode(),
+            data["channel"],
             serde.loads_typed((data["type"], data["value"])),
         )
         for (task_id, _), data in task_id_to_data.items()
@@ -108,6 +108,7 @@ def _parse_cosmosdb_checkpoint_data(serde: CosmosSerializer, key: str, data: dic
             "checkpoint_id": checkpoint_id,
         }
     }
+
     checkpoint = serde.loads_typed((data["type"], data["checkpoint"]))
     metadata = serde.loads(data["metadata"])
     parent_checkpoint_id = data.get("parent_checkpoint_id", "")
@@ -161,6 +162,7 @@ class CosmosDBSaver(BaseCheckpointSaver):
             pass
 
     def put(self, config: RunnableConfig, checkpoint: Checkpoint, metadata: CheckpointMetadata, new_versions: ChannelVersions) -> RunnableConfig:
+       
         thread_id = config["configurable"]["thread_id"]
         checkpoint_ns = config["configurable"]["checkpoint_ns"]
         checkpoint_id = checkpoint["id"]
@@ -190,6 +192,7 @@ class CosmosDBSaver(BaseCheckpointSaver):
         }
 
     def put_writes(self, config: RunnableConfig, writes: List[Tuple[str, Any]], task_id: str) -> None:
+       
         thread_id = config["configurable"]["thread_id"]
         checkpoint_ns = config["configurable"]["checkpoint_ns"]
         checkpoint_id = config["configurable"]["checkpoint_id"]
@@ -210,6 +213,7 @@ class CosmosDBSaver(BaseCheckpointSaver):
             self.container.upsert_item(data)
 
     def get_tuple(self, config: RunnableConfig) -> Optional[CheckpointTuple]:
+       
         thread_id = config["configurable"]["thread_id"]
         checkpoint_id = get_checkpoint_id(config)
         checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
@@ -246,9 +250,9 @@ class CosmosDBSaver(BaseCheckpointSaver):
             {"name": "@thread_id", "value": thread_id}
         ]
         items = list(self.container.query_items(query=query, parameters=parameters, enable_cross_partition_query=True))
-      
+        
         for data in items:
-            if data and b"checkpoint" in data and b"metadata" in data:
+            if data and "checkpoint" in data and "metadata" in data:
                 key = data["checkpoint_key"]
                 checkpoint_id = _parse_cosmosdb_checkpoint_key(key)[
                     "checkpoint_id"
@@ -280,7 +284,7 @@ class CosmosDBSaver(BaseCheckpointSaver):
         pending_writes = _load_writes(
             self.cosmos_serde,
             {
-                (parsed_key["task_id"], parsed_key["idx"]): self.container.read_item(partition_key=key["partition_key"], id=key["id"])
+                (parsed_key["task_id"], parsed_key["idx"]): self.container.read_item(partition_key=key["partition_key"], item=key["id"])
                 for key, parsed_key in sorted(
                     zip(matching_keys, parsed_keys), key=lambda x: x[1]["idx"]
                 )
