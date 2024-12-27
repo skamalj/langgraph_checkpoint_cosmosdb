@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "langgraph_checkpoint_cosmosdb"
-version = "0.1.8"
+version = "0.2.3"
 description = "Azure CosmosDB checkpoint saver implementation for LangGraph"
 authors = [{name = "Kamal", email = "skamalj@github.com"}]
 readme = "README.md"
@@ -12,7 +12,8 @@ requires-python = ">=3.9"
 dependencies = [
     "langchain-core",
     "langgraph",
-    "azure-cosmos"
+    "azure-cosmos",
+    "azure-identity"
 ]
 classifiers = [
     "Programming Language :: Python :: 3",

@@ -13,23 +13,25 @@ To install the package, ensure you have Python 3.9 or higher, and run:
 
 ## Usage
 
-### Setting Up CosmosDBSaver
+### Setting Up Environment
 
-To use the `CosmosDBSaver`, you need to provide the CosmosDB endpoint and key, along with the database and container names. These can be set as environment variables:
-
+To use the `CosmosDBSaver`
+- You need to set CosmosDB endpoint and key if you want it to create your specified database and container.
 ```
 export COSMOSDB_ENDPOINT='your_cosmosdb_endpoint'
 export COSMOSDB_KEY='your_cosmosdb_key'
 ```
+- If database and container already exists then this can work via default RBAC credentials. Ex. az login or by setting TENANT_ID, CLIENT_ID and CLIENT_SECRET in environment. 
+    - Note that in this case error will be thrown if database and container do not exist.  
 
-### Example
+
+## Import
 
 ```
-python
 from langgraph_checkpoint_cosmosdb import CosmosDBSaver
 ```
 
-# Initialize the saver
+## Initialize the saver
 Database and Container is created if it does not exists
 ```
 saver = CosmosDBSaver(database_name='your_database', container_name='your_container')
