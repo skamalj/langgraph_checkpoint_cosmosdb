@@ -21,8 +21,10 @@ To use the `CosmosDBSaver`
 export COSMOSDB_ENDPOINT='your_cosmosdb_endpoint'
 export COSMOSDB_KEY='your_cosmosdb_key'
 ```
-- If database and container already exists then this can work via default RBAC credentials. Ex. az login or by setting TENANT_ID, CLIENT_ID and CLIENT_SECRET in environment. 
-    - Note that in this case error will be thrown if database and container do not exist.  
+- If database and container already exists then this can work via default RBAC credentials. Ex. az login or by setting TENANT_ID, CLIENT_ID and CLIENT_SECRET in environment.
+    - For user-assigned managed identity, ensure AZURE_CLIENT_ID environment variable is set to the identity's client ID. 
+    - Note that in this case error will be thrown if database and container do not exist.
+  
 
 
 ## Import
