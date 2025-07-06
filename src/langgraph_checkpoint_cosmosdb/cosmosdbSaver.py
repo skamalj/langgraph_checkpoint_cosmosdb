@@ -3,7 +3,7 @@
 # @!
 
 from contextlib import contextmanager
-from typing import Any, Iterator, List, Optional, Tuple
+from typing import Any, Iterator, List, Optional, Tuple, Union
 
 from langchain_core.runnables import RunnableConfig
 
@@ -14,6 +14,7 @@ from azure.cosmos.exceptions import CosmosHttpResponseError
 from azure.identity import DefaultAzureCredential, CredentialUnavailableError
 from langgraph_checkpoint_cosmosdb.cosmosSerializer import CosmosSerializer
 import os
+import asyncio
 
 COSMOSDB_KEY_SEPARATOR = "$"
 
@@ -360,3 +361,58 @@ class CosmosDBSaver(BaseCheckpointSaver):
             key=lambda k: _parse_cosmosdb_checkpoint_key(k["id"])["checkpoint_id"],
         )
         return latest_key["id"]
+
+
+    async def aget_tuple(self, config: RunnableConfig) -> Optional[CheckpointTuple]:
+        return await asyncio.to_thread(self.get_tuple, config)
+
+    async def asnapshot(self, checkpoint: Checkpoint, config: RunnableConfig) -> None:
+        await asyncio.to_thread(
+            self.put,
+            config,
+            checkpoint,
+            CheckpointMetadata(),
+            ChannelVersions()
+        )
+
+    async def awrite(self, write: PendingWrite, config: RunnableConfig) -> None:
+        await asyncio.to_thread(
+            self.put_writes,
+            config,
+            [(write.channel, write.value)],
+            write.task_id
+        )
+
+    async def alist(self, config: Optional[RunnableConfig], *, filter: Optional[dict[str, Any]] = None, before: Optional[RunnableConfig] = None, limit: Optional[int] = None) -> Iterator[CheckpointTuple]:
+        return await asyncio.to_thread(
+            lambda: list(self.list(config=config, filter=filter, before=before, limit=limit))
+        )
+
+    async def aput(self, config: RunnableConfig, checkpoint: Checkpoint, metadata: CheckpointMetadata, new_versions: ChannelVersions) -> RunnableConfig:
+        return await asyncio.to_thread(self.put, config, checkpoint, metadata, new_versions)
+
+    async def aput_writes(self, config: RunnableConfig, writes: Union[List[PendingWrite], List[Tuple[str, Any]]], task_id: Optional[str] = None) -> None:
+        await asyncio.to_thread(self.put_writes, config, writes, task_id)
+
+    async def adelete(self, thread_id: str, checkpoint_namespace: str, checkpoint_id: str) -> None:
+        checkpoint_key = _make_cosmosdb_checkpoint_key(thread_id, checkpoint_namespace, checkpoint_id)
+        writes_key_prefix = _make_cosmosdb_checkpoint_writes_key(thread_id, checkpoint_namespace, checkpoint_id, "", "")
+        partition_key = _make_cosmosdb_checkpoint_key(thread_id, checkpoint_namespace, '')
+        try:
+            await asyncio.to_thread(self.container.delete_item, item=checkpoint_key, partition_key=partition_key)
+        except CosmosHttpResponseError as e:
+            if e.status_code != 404:
+                raise
+        query = "SELECT c.id FROM c WHERE STARTSWITH(c.id, @prefix)"
+        parameters = [{"name": "@prefix", "value": writes_key_prefix}]
+        items = await asyncio.to_thread(
+            lambda: list(self.container.query_items(query=query, parameters=parameters, enable_cross_partition_query=True))
+        )
+        for item in items:
+            try:
+                await asyncio.to_thread(self.container.delete_item, item=item["id"], partition_key=writes_key_prefix)
+            except CosmosHttpResponseError as e:
+                if e.status_code != 404:
+                    raise
+
+
