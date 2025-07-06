@@ -4,6 +4,7 @@ This project provides an implementation of a checkpoint saver for LangGraph usin
 
 ## Features
 - Save and retrieve langgraph checkpoints in Azure CosmosDB.
+- Suppports both sync and async saver functionality
 
 ## Installation
 
