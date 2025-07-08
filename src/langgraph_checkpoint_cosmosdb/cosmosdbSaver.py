@@ -15,8 +15,18 @@ from azure.identity import DefaultAzureCredential, CredentialUnavailableError
 from langgraph_checkpoint_cosmosdb.cosmosSerializer import CosmosSerializer
 import os
 import asyncio
+from importlib.metadata import version
 
 COSMOSDB_KEY_SEPARATOR = "$"
+
+# retrieve version from package metadata
+def _get_version():
+    try:
+        return version("langgraph_checkpoint_cosmosdb")
+    except Exception:
+        return "version-unknown"  # fallback
+
+USER_AGENT = f"langgraph-checkpoint-cosmosdb/{_get_version()}"
 
 def _make_cosmosdb_checkpoint_key(thread_id: str, checkpoint_ns: str, checkpoint_id: str) -> str:
     return COSMOSDB_KEY_SEPARATOR.join([
@@ -148,7 +158,7 @@ class CosmosDBSaver(BaseCheckpointSaver):
         try:
             if key:
                 # Use key-based authentication
-                self.client = CosmosClient(endpoint, key)
+                self.client = CosmosClient(endpoint, key, user_agent=USER_AGENT)
                 self.database = self.client.create_database_if_not_exists(database_name)
                 self.container = self.database.create_container_if_not_exists(
                     id=container_name,
@@ -157,7 +167,7 @@ class CosmosDBSaver(BaseCheckpointSaver):
             else:
                 # Use default credentials (e.g., Azure Managed Identity)
                 credential = DefaultAzureCredential()
-                self.client = CosmosClient(endpoint, credential=credential)
+                self.client = CosmosClient(endpoint, credential=credential, user_agent=USER_AGENT)
                 self.database = self.client.get_database_client(database_name)
                 self.container = self.database.get_container_client(container_name)
         except CredentialUnavailableError as e:
