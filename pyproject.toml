@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "langgraph_checkpoint_cosmosdb"
-version = "0.2.4"
+version = "0.2.5"
 description = "Azure CosmosDB checkpoint saver implementation for LangGraph"
 authors = [{name = "Kamal", email = "skamalj@github.com"}]
 readme = "README.md"

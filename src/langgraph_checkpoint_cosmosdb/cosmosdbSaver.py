@@ -113,7 +113,7 @@ def _parse_cosmosdb_checkpoint_data(serde: CosmosSerializer, key: str, data: dic
     }
 
     checkpoint = serde.loads_typed((data["type"], data["checkpoint"]))
-    metadata = serde.loads(data["metadata"])
+    metadata = serde.loads_typed(data["metadata"])
     parent_checkpoint_id = data.get("parent_checkpoint_id", "")
     parent_config = (
         {
@@ -193,7 +193,7 @@ class CosmosDBSaver(BaseCheckpointSaver):
         partition_key = _make_cosmosdb_checkpoint_key(thread_id, checkpoint_ns, '')
        
         type_, serialized_checkpoint = self.cosmos_serde.dumps_typed(checkpoint)
-        serialized_metadata = self.cosmos_serde.dumps(metadata)
+        serialized_metadata = self.cosmos_serde.dumps_typed(metadata)
         data = {
             "partition_key": partition_key,
             "id": key,

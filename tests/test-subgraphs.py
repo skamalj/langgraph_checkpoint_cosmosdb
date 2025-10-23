@@ -46,7 +46,7 @@ checkpointer = CosmosDBSaver(database_name="langgraph", container_name="checkpoi
 
 graph = builder.compile(checkpointer=checkpointer)
 
-config = {"configurable": {"thread_id": "1"}}
+config = {"configurable": {"thread_id": "333"}}
 
 
 # Test 1: Validate the state values from the graph streaming process
