@@ -187,11 +187,6 @@ class CosmosDBSaver(BaseCheckpointSaver):
             raise RuntimeError("An unexpected error occurred during CosmosClient initialization.") from e
 
         self.cosmos_serde = CosmosSerializer(self.serde)
-        self.database = self.client.get_database_client(database_name)
-        self.container = self.database.create_container_if_not_exists(
-            id=container_name,
-            partition_key=PartitionKey(path="/partition_key")
-        )
 
     @classmethod
     @contextmanager

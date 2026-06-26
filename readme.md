@@ -25,41 +25,57 @@ pip install "langgraph-checkpoint-cosmosdb[reducer]"
 
 **Requires Python 3.10+**
 
+## Database and Container Setup
+
+| Auth mode | Database | Container | Partition key |
+|---|---|---|---|
+| **Key-based** (`COSMOSDB_KEY` set) | Created automatically if absent | Created automatically if absent | `/partition_key` (set by saver) |
+| **RBAC / Managed Identity** (no key) | **Must pre-exist** | **Must pre-exist** | `/partition_key` (must be pre-configured) |
+
+**Key-based** is the easiest way to get started — just point the saver at an existing CosmosDB account and it will provision everything.
+
+**RBAC** is recommended for production. Because the saver only calls `get_database_client` / `get_container_client` (no write permissions needed at setup time), the database and container must already be provisioned before the saver is initialised. Create them via the Azure portal, Terraform, Bicep, or the Azure CLI:
+
+```bash
+az cosmosdb sql database create --account-name <account> --name <db>
+az cosmosdb sql container create \
+  --account-name <account> --database-name <db> --name <container> \
+  --partition-key-path "/partition_key"
+```
+
+> **Important:** The partition key path must be `/partition_key` regardless of how the container is created.
+
 ## Authentication
 
-### Key-based (recommended for development)
-
-Set both env vars — the saver will create the database and container if they don't exist:
+### Key-based (development / admin access)
 
 ```bash
 export COSMOSDB_ENDPOINT="https://<account>.documents.azure.com:443/"
 export COSMOSDB_KEY="<your-key>"
 ```
 
-### Azure RBAC / Managed Identity (recommended for production)
+### Azure RBAC / Managed Identity (production)
 
-Set only the endpoint — no key. The saver uses `DefaultAzureCredential`, which resolves in this order: environment variables → managed identity → `az login`.
+Set only the endpoint — no key. The saver uses `DefaultAzureCredential`, which resolves in this order: environment service principal → managed identity → `az login`.
 
 ```bash
 export COSMOSDB_ENDPOINT="https://<account>.documents.azure.com:443/"
-# Key not set → falls back to DefaultAzureCredential
+# COSMOSDB_KEY not set → DefaultAzureCredential is used
 ```
 
-For user-assigned managed identity also set:
+For **user-assigned managed identity**:
 
 ```bash
 export AZURE_CLIENT_ID="<managed-identity-client-id>"
 ```
 
-For service principal:
+For **service principal**:
 
 ```bash
 export AZURE_TENANT_ID="<tenant-id>"
 export AZURE_CLIENT_ID="<client-id>"
 export AZURE_CLIENT_SECRET="<client-secret>"
 ```
-
-> **Note:** When using RBAC the database and container must already exist — the saver will not create them automatically.
 
 ## Quick Start
 
