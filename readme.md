@@ -2,14 +2,16 @@
 
 Azure CosmosDB checkpoint saver for [LangGraph](https://github.com/langchain-ai/langgraph). Persists agent state between runs so your graphs can resume from any prior checkpoint.
 
+**What makes this checkpointer different:** it has message history pruning built in. Pass a `MessageReducer` and the checkpointer automatically caps your message list before writing to CosmosDB — no extra code in your graph, no state annotation changes required. This is the only LangGraph CosmosDB checkpointer with this capability.
+
 ## Features
 
 - **Full checkpoint persistence** — save, retrieve, and list LangGraph checkpoints in CosmosDB
+- **Built-in message pruning** — optional `MessageReducer` prunes message history at the persistence layer, keeping checkpoints lean without changing your graph code
 - **Sync and async API** — `put`/`get_tuple`/`list` and their `aput`/`aget_tuple`/`alist` async counterparts
 - **Subgraph support** — correctly checkpoints parent and subgraph state independently
 - **Flexible authentication** — key-based or Azure RBAC (Managed Identity, `az login`, service principal)
 - **Auto-creates database and container** — when using key-based auth
-- **Optional message pruning** — integrate with [`agentstate-reducer`](https://pypi.org/project/agentstate-reducer/) to cap message history size before persisting
 
 ## Installation
 
@@ -173,13 +175,25 @@ for _, chunk in graph.stream({"foo": "hello"}, config, subgraphs=True):
     print(chunk)
 ```
 
-## Message Pruning
+## Built-in Message Pruning
 
-For long-running agents, message history grows unboundedly. Use `agentstate-reducer` to cap the number of messages stored in each checkpoint:
+Long-running agents accumulate message history with every turn. Left unchecked this inflates checkpoint size, increases CosmosDB storage costs, and eventually blows past LLM context limits.
+
+This checkpointer solves that at the persistence layer: pass a `MessageReducer` and it automatically prunes the message list inside `put()` before the checkpoint is serialised and written to CosmosDB. **Your graph code, state definition, and node logic stay untouched.**
+
+This is an alternative to — or complement of — the LangGraph `Annotated[list, reducer_fn]` pattern. Use the checkpoint-layer approach when:
+
+- You don't own the graph or state definition (e.g. using a pre-built LangGraph agent)
+- You want pruning to happen unconditionally at every save, regardless of which node triggered it
+- You want to keep all in-memory state intact and only prune what gets persisted
+
+### Install with reducer support
 
 ```bash
 pip install "langgraph-checkpoint-cosmosdb[reducer]"
 ```
+
+### Usage
 
 ```python
 from agentstate_reducer import MessageReducer
@@ -190,14 +204,18 @@ reducer = MessageReducer(min_messages=10, max_messages=20)
 checkpointer = CosmosDBSaver(
     database_name="mydb",
     container_name="checkpoints",
-    reducer=reducer,        # prune before each save
-    messages_key="messages" # name of the state channel (default)
+    reducer=reducer,        # prune before each checkpoint save
+    messages_key="messages" # state channel holding the message list (default)
 )
 ```
 
-The reducer runs transparently inside `put()` — the graph sees no difference. When the message list in the checkpoint exceeds `max_messages`, the oldest `human`/`ai` messages are pruned until `min_messages` remain. System messages, tool messages, and index 0 are always preserved.
+When `len(messages) > max_messages`, the oldest `human`/`ai` messages are removed until `min_messages` remain. The following are **never** pruned:
 
-See [agentstate-reducer docs](https://pypi.org/project/agentstate-reducer/) for full configuration options including summarization callbacks.
+- Index 0 (typically the system prompt) — controlled by `preserve_first=True`
+- `system` and `function` messages
+- `tool` messages — unless their parent `ai` message is pruned (cascade behaviour, configurable)
+
+See [agentstate-reducer on PyPI](https://pypi.org/project/agentstate-reducer/) for full configuration: `preserve_first`, `cascade_tool_messages`, `summarize_fn`, and role alias support (`user`/`assistant`/`agent`).
 
 ## Data Model
 
