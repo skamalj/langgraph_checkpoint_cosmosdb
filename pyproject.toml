@@ -4,11 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "langgraph_checkpoint_cosmosdb"
-version = "0.2.5"
+version = "0.2.6"
 description = "Azure CosmosDB checkpoint saver implementation for LangGraph"
 authors = [{name = "Kamal", email = "skamalj@github.com"}]
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
     "langchain-core",
     "langgraph",
@@ -22,12 +22,24 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
+reducer = [
+    "agentstate-reducer>=0.1.1",
+]
 dev = [
     "pytest>=7.0",
     "pytest-cov",
     "black",
     "isort",
     "mypy"
+]
+
+
+[dependency-groups]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov",
+    "langchain-openai",
+    "langgraph-checkpoint-cosmosdb[reducer]",
 ]
 
 [tool.hatch.build.targets.wheel]

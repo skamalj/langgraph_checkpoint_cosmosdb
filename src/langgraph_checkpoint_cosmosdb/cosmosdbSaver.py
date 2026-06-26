@@ -2,6 +2,7 @@
 # in case of cosmosdb PK becomes partition_key and SK will be id.
 # @!
 
+import copy
 from contextlib import contextmanager
 from typing import Any, Iterator, List, Optional, Tuple, Union
 
@@ -138,8 +139,26 @@ def _parse_cosmosdb_checkpoint_data(serde: CosmosSerializer, key: str, data: dic
 class CosmosDBSaver(BaseCheckpointSaver):
     container: Any
 
-    def __init__(self, database_name: str, container_name: str):
+    def __init__(
+        self,
+        database_name: str,
+        container_name: str,
+        reducer=None,
+        messages_key: str = "messages",
+    ):
+        """
+        Args:
+            database_name:  CosmosDB database name.
+            container_name: CosmosDB container name.
+            reducer:        Optional ``MessageReducer`` from ``agentstate-reducer``.
+                            When set, the reducer is applied to the ``messages_key``
+                            channel of every checkpoint before it is persisted.
+            messages_key:   Name of the state channel that holds the message list.
+                            Defaults to ``"messages"``.
+        """
         super().__init__()
+        self.reducer = reducer
+        self.messages_key = messages_key
         endpoint = os.getenv("COSMOSDB_ENDPOINT")
         if not endpoint:
             raise ValueError("COSMOSDB_ENDPOINT environment variable is not set")
@@ -184,7 +203,23 @@ class CosmosDBSaver(BaseCheckpointSaver):
         finally:
             pass
 
+    def _apply_reducer(self, checkpoint: Checkpoint) -> Checkpoint:
+        """Return a checkpoint with the messages channel reduced (non-mutating)."""
+        if self.reducer is None:
+            return checkpoint
+        channel_values = checkpoint.get("channel_values", {})
+        messages = channel_values.get(self.messages_key)
+        if not messages:
+            return checkpoint
+        result = self.reducer.reduce(existing=messages, new=[])
+        new_channel_values = dict(channel_values)
+        new_channel_values[self.messages_key] = result.surviving
+        new_checkpoint = copy.copy(checkpoint)
+        new_checkpoint["channel_values"] = new_channel_values
+        return new_checkpoint
+
     def put(self, config: RunnableConfig, checkpoint: Checkpoint, metadata: CheckpointMetadata, new_versions: ChannelVersions) -> RunnableConfig:
+        checkpoint = self._apply_reducer(checkpoint)
         thread_id = config["configurable"]["thread_id"]
         checkpoint_ns = config["configurable"]["checkpoint_ns"]
         checkpoint_id = checkpoint["id"]
