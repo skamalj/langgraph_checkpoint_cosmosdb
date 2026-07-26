@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "langgraph_checkpoint_cosmosdb"
-version = "0.2.7"
+version = "0.2.8"
 description = "LangGraph checkpoint saver for Azure CosmosDB with built-in message history pruning via agentstate-reducer"
 authors = [{name = "Kamal", email = "skamalj@github.com"}]
 readme = "README.md"
@@ -29,7 +29,7 @@ classifiers = [
 
 [project.optional-dependencies]
 reducer = [
-    "agentstate-reducer>=0.1.1",
+    "agentstate-reducer>=0.3.0",
 ]
 dev = [
     "pytest>=7.0",
