@@ -4,7 +4,7 @@
 
 import copy
 from contextlib import contextmanager
-from typing import Any, Iterator, List, Optional, Tuple, Union
+from typing import AsyncIterator, Any, Iterator, List, Optional, Tuple, Union
 
 from langchain_core.runnables import RunnableConfig
 
@@ -276,7 +276,7 @@ class CosmosDBSaver(BaseCheckpointSaver):
             }
         }
 
-    def put_writes(self, config: RunnableConfig, writes: List[Tuple[str, Any]], task_id: str) -> None:
+    def put_writes(self, config: RunnableConfig, writes: List[Tuple[str, Any]], task_id: str, task_path: str = "") -> None:
        
         thread_id = config["configurable"]["thread_id"]
         checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
@@ -355,19 +355,46 @@ class CosmosDBSaver(BaseCheckpointSaver):
             {"name": "@partition_key", "value": partition_key}
         ]
         items = list(self.container.query_items(query=query, parameters=parameters, enable_cross_partition_query=True))
-        
+        # Newest first (checkpoint ids are time-ordered), then `before`, metadata filter and limit.
+        items = [d for d in items if d and "checkpoint" in d and "metadata" in d]
+        items.sort(key=lambda d: _parse_cosmosdb_checkpoint_key(d["id"])["checkpoint_id"], reverse=True)
+        before_id = get_checkpoint_id(before) if before else None
+        yielded = 0
         for data in items:
-            if data and "checkpoint" in data and "metadata" in data:
-                key = data["id"]
-                checkpoint_id = _parse_cosmosdb_checkpoint_key(key)[
-                    "checkpoint_id"
-                ]
-                pending_writes = self._load_pending_writes(
-                    thread_id, checkpoint_ns, checkpoint_id
-                )
-                yield _parse_cosmosdb_checkpoint_data(
-                    self.cosmos_serde, key, data, pending_writes=pending_writes
-                )
+            key = data["id"]
+            checkpoint_id = _parse_cosmosdb_checkpoint_key(key)["checkpoint_id"]
+            if before_id is not None and checkpoint_id >= before_id:
+                continue
+            pending_writes = self._load_pending_writes(thread_id, checkpoint_ns, checkpoint_id)
+            tup = _parse_cosmosdb_checkpoint_data(self.cosmos_serde, key, data, pending_writes=pending_writes)
+            if tup is None:
+                continue
+            if filter and not all(tup.metadata.get(k) == v for k, v in filter.items()):
+                continue
+            yield tup
+            yielded += 1
+            if limit is not None and yielded >= limit:
+                return
+
+    def delete_thread(self, thread_id: str) -> None:
+        """Delete every checkpoint and pending write for a thread (LangGraph BaseCheckpointSaver API)."""
+        for prefix in (
+            COSMOSDB_KEY_SEPARATOR.join(["checkpoint", thread_id, ""]),
+            COSMOSDB_KEY_SEPARATOR.join(["writes", thread_id, ""]),
+        ):
+            docs = list(self.container.query_items(
+                query='SELECT c["id"], c["partition_key"] FROM c WHERE STARTSWITH(c["partition_key"], @p)',
+                parameters=[{"name": "@p", "value": prefix}],
+                enable_cross_partition_query=True,
+            ))
+            for d in docs:
+                try:
+                    self.container.delete_item(item=d["id"], partition_key=d["partition_key"])
+                except Exception:  # already gone
+                    pass
+
+    async def adelete_thread(self, thread_id: str) -> None:
+        await asyncio.to_thread(self.delete_thread, thread_id)
 
     def _load_pending_writes(self, thread_id: str, checkpoint_ns: str, checkpoint_id: str) -> List[PendingWrite]:
         
@@ -441,16 +468,18 @@ class CosmosDBSaver(BaseCheckpointSaver):
             write.task_id
         )
 
-    async def alist(self, config: Optional[RunnableConfig], *, filter: Optional[dict[str, Any]] = None, before: Optional[RunnableConfig] = None, limit: Optional[int] = None) -> Iterator[CheckpointTuple]:
-        return await asyncio.to_thread(
+    async def alist(self, config: Optional[RunnableConfig], *, filter: Optional[dict[str, Any]] = None, before: Optional[RunnableConfig] = None, limit: Optional[int] = None) -> AsyncIterator[CheckpointTuple]:
+        items = await asyncio.to_thread(
             lambda: list(self.list(config=config, filter=filter, before=before, limit=limit))
         )
+        for item in items:
+            yield item
 
     async def aput(self, config: RunnableConfig, checkpoint: Checkpoint, metadata: CheckpointMetadata, new_versions: ChannelVersions) -> RunnableConfig:
         return await asyncio.to_thread(self.put, config, checkpoint, metadata, new_versions)
 
-    async def aput_writes(self, config: RunnableConfig, writes: Union[List[PendingWrite], List[Tuple[str, Any]]], task_id: Optional[str] = None) -> None:
-        await asyncio.to_thread(self.put_writes, config, writes, task_id)
+    async def aput_writes(self, config: RunnableConfig, writes: Union[List[PendingWrite], List[Tuple[str, Any]]], task_id: Optional[str] = None, task_path: str = "") -> None:
+        await asyncio.to_thread(self.put_writes, config, writes, task_id, task_path)
 
     async def adelete(self, thread_id: str, checkpoint_namespace: str, checkpoint_id: str) -> None:
         checkpoint_key = _make_cosmosdb_checkpoint_key(thread_id, checkpoint_namespace, checkpoint_id)
