@@ -14,6 +14,9 @@ from azure.cosmos import CosmosClient, exceptions, PartitionKey
 from azure.cosmos.exceptions import CosmosHttpResponseError
 from azure.identity import DefaultAzureCredential, CredentialUnavailableError
 from langgraph_checkpoint_cosmosdb.cosmosSerializer import CosmosSerializer
+from langgraph_checkpoint_cosmosdb._nudge import nudge_unbounded_history
+import logging
+logger = logging.getLogger("langgraph_checkpoint_cosmosdb")
 import os
 import asyncio
 
@@ -159,6 +162,8 @@ class CosmosDBSaver(BaseCheckpointSaver):
         super().__init__()
         self.reducer = reducer
         self.messages_key = messages_key
+        if reducer is None:
+            nudge_unbounded_history(logger)
         endpoint = os.getenv("COSMOSDB_ENDPOINT")
         if not endpoint:
             raise ValueError("COSMOSDB_ENDPOINT environment variable is not set")
