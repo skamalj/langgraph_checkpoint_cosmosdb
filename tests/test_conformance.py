@@ -7,6 +7,7 @@ import uuid
 
 import pytest
 from langgraph.checkpoint.conformance import checkpointer_test
+from langgraph.checkpoint.conformance.capabilities import EXTENDED_CAPABILITIES
 from langgraph.checkpoint.conformance.report import ProgressCallbacks
 from langgraph.checkpoint.conformance.validate import validate
 
@@ -25,11 +26,18 @@ async def _saver():
 
 
 @pytest.mark.asyncio
-async def test_official_conformance_base_capabilities():
+async def test_official_conformance_all_capabilities():
     try:
         report = await validate(_saver, progress=ProgressCallbacks.quiet())
         failures = {cap: r.failures for cap, r in report.results.items() if r.failures}
+        report.print_report()
         assert report.passed_all_base(), failures
+        # Every extended capability (copy_thread, delete_for_runs, prune) must be detected and pass.
+        for cap in EXTENDED_CAPABILITIES:
+            r = report.results.get(cap.value)
+            assert r is not None and r.detected, f"{cap.value} not implemented"
+            assert r.passed is True, {cap.value: r.failures}
+        assert report.passed_all(), failures
         assert report.conformance_level() == "FULL"
     finally:
         from azure.cosmos import CosmosClient

@@ -4,7 +4,7 @@
 
 import copy
 from contextlib import contextmanager
-from typing import AsyncIterator, Any, Iterator, List, Optional, Tuple, Union
+from typing import AsyncIterator, Any, Iterator, List, Optional, Sequence, Tuple, Union
 
 from langchain_core.runnables import RunnableConfig
 
@@ -21,6 +21,8 @@ import os
 import asyncio
 
 COSMOSDB_KEY_SEPARATOR = "$"
+# Cosmos system properties that must not be copied into a new document.
+_COSMOS_SYSTEM_FIELDS = ("_rid", "_self", "_etag", "_attachments", "_ts")
 
 def _make_cosmosdb_checkpoint_key(thread_id: str, checkpoint_ns: str, checkpoint_id: str) -> str:
     return COSMOSDB_KEY_SEPARATOR.join([
@@ -267,6 +269,11 @@ class CosmosDBSaver(BaseCheckpointSaver):
             if parent_checkpoint_id
             else "",
         }
+        # Top-level copy of metadata.run_id so delete_for_runs can query it
+        # without deserialising every checkpoint's metadata blob.
+        run_id = metadata.get("run_id") if metadata else None
+        if run_id:
+            data["run_id"] = run_id
         try:
             self.container.create_item(data)
         except CosmosHttpResponseError as e:
@@ -400,6 +407,127 @@ class CosmosDBSaver(BaseCheckpointSaver):
 
     async def adelete_thread(self, thread_id: str) -> None:
         await asyncio.to_thread(self.delete_thread, thread_id)
+
+    # ------------------------------------------------------------------
+    # Optional BaseCheckpointSaver capabilities: copy_thread / delete_for_runs / prune
+    # ------------------------------------------------------------------
+
+    def _thread_docs(self, thread_id: str, kind: str, projection: str = "*") -> list:
+        """All ``kind`` ("checkpoint" or "writes") docs of a thread, every namespace (cross-partition)."""
+        prefix = COSMOSDB_KEY_SEPARATOR.join([kind, thread_id, ""])
+        return list(self.container.query_items(
+            query=f'SELECT {projection} FROM c WHERE STARTSWITH(c["partition_key"], @p)',
+            parameters=[{"name": "@p", "value": prefix}],
+            enable_cross_partition_query=True,
+        ))
+
+    def _delete_doc(self, doc_id: str, partition_key: str) -> None:
+        try:
+            self.container.delete_item(item=doc_id, partition_key=partition_key)
+        except CosmosHttpResponseError as e:
+            if e.status_code != 404:
+                raise
+
+    def _delete_checkpoint_and_writes(self, thread_id: str, checkpoint_ns: str, checkpoint_id: str) -> None:
+        """Delete one checkpoint doc plus every write doc in its writes partition."""
+        self._delete_doc(
+            _make_cosmosdb_checkpoint_key(thread_id, checkpoint_ns, checkpoint_id),
+            _make_cosmosdb_checkpoint_key(thread_id, checkpoint_ns, ""),
+        )
+        writes_pk = _make_cosmosdb_checkpoint_writes_key(thread_id, checkpoint_ns, checkpoint_id, "", "")
+        writes = list(self.container.query_items(
+            query="SELECT c.id FROM c WHERE c.partition_key=@pk",
+            parameters=[{"name": "@pk", "value": writes_pk}],
+            partition_key=writes_pk,
+        ))
+        for w in writes:
+            self._delete_doc(w["id"], writes_pk)
+
+    def copy_thread(self, source_thread_id: str, target_thread_id: str) -> None:
+        """Copy every checkpoint and pending write of ``source_thread_id`` (all namespaces) to ``target_thread_id``.
+
+        Checkpoint ids, parent ids, metadata and write ordering are preserved; only the
+        thread segment of ``partition_key`` / ``id`` is rewritten (keys are parsed and
+        rebuilt, never string-replaced). The source thread is left untouched; a
+        nonexistent source is a no-op. Documents are upserted, so an existing target
+        checkpoint with the same id is overwritten.
+        """
+        if source_thread_id == target_thread_id:
+            return
+        for doc in self._thread_docs(source_thread_id, "checkpoint"):
+            k = _parse_cosmosdb_checkpoint_key(doc["id"])
+            new_doc = {f: v for f, v in doc.items() if f not in _COSMOS_SYSTEM_FIELDS}
+            new_doc["id"] = _make_cosmosdb_checkpoint_key(target_thread_id, k["checkpoint_ns"], k["checkpoint_id"])
+            new_doc["partition_key"] = _make_cosmosdb_checkpoint_key(target_thread_id, k["checkpoint_ns"], "")
+            self.container.upsert_item(new_doc)
+        for doc in self._thread_docs(source_thread_id, "writes"):
+            k = _parse_cosmosdb_checkpoint_writes_key(doc["id"])
+            new_doc = {f: v for f, v in doc.items() if f not in _COSMOS_SYSTEM_FIELDS}
+            new_doc["id"] = _make_cosmosdb_checkpoint_writes_key(
+                target_thread_id, k["checkpoint_ns"], k["checkpoint_id"], k["task_id"], k["idx"]
+            )
+            new_doc["partition_key"] = _make_cosmosdb_checkpoint_writes_key(
+                target_thread_id, k["checkpoint_ns"], k["checkpoint_id"], "", ""
+            )
+            self.container.upsert_item(new_doc)
+
+    async def acopy_thread(self, source_thread_id: str, target_thread_id: str) -> None:
+        await asyncio.to_thread(self.copy_thread, source_thread_id, target_thread_id)
+
+    def delete_for_runs(self, run_ids: Sequence[str]) -> None:
+        """Delete every checkpoint (and its pending writes) whose ``metadata["run_id"]`` is in ``run_ids``.
+
+        Searches all threads and namespaces via the top-level ``run_id`` field that
+        ``put`` stores alongside the serialized metadata. Documents written by
+        versions of this package that predate that field are not found by this
+        method. Empty ``run_ids`` or unknown ids are a no-op.
+        """
+        run_ids = [r for r in run_ids if r]
+        if not run_ids:
+            return
+        docs = list(self.container.query_items(
+            query="SELECT c.id, c.partition_key FROM c WHERE ARRAY_CONTAINS(@ids, c.run_id)",
+            parameters=[{"name": "@ids", "value": list(run_ids)}],
+            enable_cross_partition_query=True,
+        ))
+        for d in docs:
+            k = _parse_cosmosdb_checkpoint_key(d["id"])
+            self._delete_checkpoint_and_writes(k["thread_id"], k["checkpoint_ns"], k["checkpoint_id"])
+
+    async def adelete_for_runs(self, run_ids: Sequence[str]) -> None:
+        await asyncio.to_thread(self.delete_for_runs, run_ids)
+
+    def prune(self, thread_ids: Sequence[str], *, strategy: str = "keep_latest") -> None:
+        """Prune checkpoints for ``thread_ids``.
+
+        ``"keep_latest"`` keeps, per thread and per namespace, only the checkpoint with
+        the greatest checkpoint id (and its pending writes) and deletes the rest.
+        ``"delete"`` removes the threads entirely (same as ``delete_thread``).
+        Any other strategy raises ``ValueError``. Empty / unknown threads are a no-op.
+
+        Caveat: this implementation is not ``DeltaChannel``-aware. Dropping the
+        ancestors of the kept checkpoint severs the parent chain that
+        ``DeltaChannel`` reconstruction walks, so graphs using ``DeltaChannel``
+        should not be pruned with ``"keep_latest"``.
+        """
+        if strategy not in ("keep_latest", "delete"):
+            raise ValueError(f"Unknown prune strategy: {strategy!r} (expected 'keep_latest' or 'delete')")
+        for thread_id in thread_ids:
+            if strategy == "delete":
+                self.delete_thread(thread_id)
+                continue
+            by_ns: dict = {}
+            for d in self._thread_docs(thread_id, "checkpoint", 'c["id"]'):
+                k = _parse_cosmosdb_checkpoint_key(d["id"])
+                by_ns.setdefault(k["checkpoint_ns"], []).append(k["checkpoint_id"])
+            for ns, ids in by_ns.items():
+                latest = max(ids)
+                for cid in ids:
+                    if cid != latest:
+                        self._delete_checkpoint_and_writes(thread_id, ns, cid)
+
+    async def aprune(self, thread_ids: Sequence[str], *, strategy: str = "keep_latest") -> None:
+        await asyncio.to_thread(self.prune, thread_ids, strategy=strategy)
 
     def _load_pending_writes(self, thread_id: str, checkpoint_ns: str, checkpoint_id: str) -> List[PendingWrite]:
         
